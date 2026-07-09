@@ -46,6 +46,7 @@ interface ScanProject {
 
 interface ScanIssue {
     type: string;
+    category?: string;
     severity: string;
     name: string;
     match: string;
@@ -67,6 +68,19 @@ interface ScanSummary {
     high: number;
     medium: number;
     low: number;
+}
+
+interface CategoryScore {
+    name: string;
+    description: string;
+    score: number;
+    grade: 'A' | 'B' | 'C' | 'D' | 'F';
+    issuesCount: {
+        critical: number;
+        high: number;
+        medium: number;
+        low: number;
+    };
 }
 
 interface InteractionNode {
@@ -374,6 +388,212 @@ function buildScanLogEntries(scan: ScanRun | null): ScanLogEntry[] {
     }
 
     return [];
+}
+
+function getCategoryScores(issues: ScanIssue[]): CategoryScore[] {
+    const categoriesList: Array<{
+        key: string;
+        name: string;
+        description: string;
+        match: (issue: ScanIssue) => boolean;
+    }> = [
+        {
+            key: 'secrets',
+            name: 'Secrets Detection',
+            description: 'Scans for hardcoded API keys, OAuth tokens, passwords, and database connection strings.',
+            match: (issue) =>
+                issue.type === 'secret' ||
+                issue.type === 'config' ||
+                issue.name.toLowerCase().includes('secret') ||
+                issue.name.toLowerCase().includes('key') ||
+                issue.name.toLowerCase().includes('token') ||
+                issue.name.toLowerCase().includes('password') ||
+                issue.name.toLowerCase().includes('credential'),
+        },
+        {
+            key: 'data_security',
+            name: 'Data Security',
+            description: 'Identifies leaks of Personally Identifiable Information (PII), insecure cookies, and permissive CORS policies.',
+            match: (issue) =>
+                issue.type === 'pii' ||
+                issue.category === 'insecure-cookie' ||
+                issue.category === 'sensitive-logging' ||
+                issue.category === 'cors' ||
+                issue.name.toLowerCase().includes('cookie') ||
+                issue.name.toLowerCase().includes('ip address') ||
+                issue.name.toLowerCase().includes('email'),
+        },
+        {
+            key: 'prompt_security',
+            name: 'Prompt Security',
+            description: 'Detects prompt injection vectors, insecure prompt templates, and leaks in AI/LLM system instructions.',
+            match: (issue) =>
+                issue.file.toLowerCase().includes('prompt') ||
+                issue.name.toLowerCase().includes('prompt') ||
+                issue.name.toLowerCase().includes('llm') ||
+                issue.name.toLowerCase().includes('gpt') ||
+                issue.name.toLowerCase().includes('openai') ||
+                issue.name.toLowerCase().includes('anthropic') ||
+                issue.name.toLowerCase().includes('gemini') ||
+                issue.match.toLowerCase().includes('prompt') ||
+                (issue.description?.toLowerCase().includes('prompt') ?? false),
+        },
+        {
+            key: 'vulnerabilities',
+            name: 'Software Vulnerabilities',
+            description: 'Finds security flaws such as SQL Injection, XSS, SSRF, Path Traversal, and Command Injection.',
+            match: (issue) => issue.type === 'vulnerability',
+        },
+        {
+            key: 'dependencies',
+            name: 'Dependency Security',
+            description: 'Checks third-party packages and lockfiles for known vulnerabilities (CVEs) via OSV.',
+            match: (issue) => issue.type === 'dependency',
+        },
+        {
+            key: 'code_quality',
+            name: 'Code Quality',
+            description: 'Analyzes files for complex logic, large file sizes, deeply nested code, and outstanding TODO items.',
+            match: (issue) => issue.type === 'code_quality',
+        },
+    ];
+
+    return categoriesList.map((cat) => {
+        const catIssues = issues.filter(cat.match);
+
+        let score = 100;
+        const issuesCount = { critical: 0, high: 0, medium: 0, low: 0 };
+
+        catIssues.forEach((issue) => {
+            const sev = (issue.severity || 'low').toLowerCase() as keyof typeof issuesCount;
+            issuesCount[sev] = (issuesCount[sev] || 0) + 1;
+
+            if (sev === 'critical')    score -= 40;
+            else if (sev === 'high')   score -= 25;
+            else if (sev === 'medium') score -= 10;
+            else                       score -= 5;
+        });
+
+        score = Math.max(0, score);
+
+        let grade: CategoryScore['grade'] = 'A';
+        if (score < 60)      grade = 'F';
+        else if (score < 70) grade = 'D';
+        else if (score < 80) grade = 'C';
+        else if (score < 90) grade = 'B';
+
+        return { name: cat.name, description: cat.description, score, grade, issuesCount };
+    });
+}
+
+function AdvancedRiskScoringSystem({ issues }: { issues: ScanIssue[] }) {
+    const scores = useMemo(() => getCategoryScores(issues), [issues]);
+
+    const gradeBgColors: Record<string, string> = {
+        A: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20',
+        B: 'bg-blue-500/10 text-blue-400 border-blue-500/20',
+        C: 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20',
+        D: 'bg-orange-500/10 text-orange-400 border-orange-500/20',
+        F: 'bg-red-500/10 text-red-400 border-red-500/20',
+    };
+
+    const gradeBarColors: Record<string, string> = {
+        A: 'bg-emerald-500',
+        B: 'bg-blue-500',
+        C: 'bg-yellow-500',
+        D: 'bg-orange-500',
+        F: 'bg-red-500',
+    };
+
+    return (
+        <div className="space-y-3">
+            {/* Section label */}
+            <div>
+                <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">
+                    Advanced Risk Scoring
+                </p>
+                <p className="text-[10px] text-muted-foreground/60 mt-0.5">
+                    Category-specific security posture for this scan run.
+                </p>
+            </div>
+
+            {/* 6-card responsive grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {scores.map((cat) => {
+                    const totalIssues =
+                        cat.issuesCount.critical +
+                        cat.issuesCount.high +
+                        cat.issuesCount.medium +
+                        cat.issuesCount.low;
+
+                    return (
+                        <div
+                            key={cat.name}
+                            className="bg-card border border-border/40 hover:border-border/70 rounded-lg p-3.5 flex flex-col gap-3 transition-all duration-200 hover:-translate-y-px hover:shadow-sm"
+                        >
+                            {/* Name + grade badge */}
+                            <div className="flex items-start justify-between gap-2">
+                                <p className="text-xs font-medium text-foreground leading-tight">
+                                    {cat.name}
+                                </p>
+                                <span
+                                    className={cn(
+                                        'shrink-0 text-[10px] font-mono font-semibold px-1.5 py-0.5 rounded border',
+                                        gradeBgColors[cat.grade]
+                                    )}
+                                >
+                                    {cat.grade} &middot; {cat.score}
+                                </span>
+                            </div>
+
+                            {/* Description */}
+                            <p className="text-[10px] text-muted-foreground leading-relaxed flex-1">
+                                {cat.description}
+                            </p>
+
+                            {/* Progress bar + severity breakdown */}
+                            <div className="space-y-1.5">
+                                <div className="h-1 w-full rounded-full bg-secondary/50 overflow-hidden">
+                                    <div
+                                        className={cn(
+                                            'h-full rounded-full transition-all duration-500',
+                                            gradeBarColors[cat.grade]
+                                        )}
+                                        style={{ width: `${cat.score}%` }}
+                                    />
+                                </div>
+
+                                <div className="flex items-center justify-between text-[9px] font-mono text-muted-foreground/70">
+                                    <span className="flex items-center gap-1.5">
+                                        {cat.issuesCount.critical > 0 && (
+                                            <span className="text-red-400">{cat.issuesCount.critical}c</span>
+                                        )}
+                                        {cat.issuesCount.high > 0 && (
+                                            <span className="text-orange-400">{cat.issuesCount.high}h</span>
+                                        )}
+                                        {cat.issuesCount.medium > 0 && (
+                                            <span className="text-yellow-400">{cat.issuesCount.medium}m</span>
+                                        )}
+                                        {cat.issuesCount.low > 0 && (
+                                            <span className="text-blue-400">{cat.issuesCount.low}l</span>
+                                        )}
+                                        {totalIssues === 0 && (
+                                            <span className="text-emerald-400">clean</span>
+                                        )}
+                                    </span>
+                                    <span>
+                                        {totalIssues === 0
+                                            ? 'No issues'
+                                            : `${totalIssues} issue${totalIssues !== 1 ? 's' : ''}`}
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+                    );
+                })}
+            </div>
+        </div>
+    );
 }
 
 export default function ProjectDetailPage() {
@@ -1085,6 +1305,13 @@ export default function ProjectDetailPage() {
                             </div>
                         </>
                     )}
+                    {/* Advanced Risk Scoring System */}
+                    {currentScan && (
+                        <AdvancedRiskScoringSystem
+                            issues={currentScan.results?.issues ?? []}
+                        />
+                    )}
+
                     {/* Scan log */}
                     <div className="bg-card border border-border/40 rounded-md overflow-hidden">
                         <div className="px-4 py-2.5 border-b border-border/40 flex items-center justify-between">
